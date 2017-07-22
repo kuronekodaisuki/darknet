@@ -8,6 +8,10 @@
 	#define snprintf(buf,len, format,...) _snprintf_s(buf, len,len, format, __VA_ARGS__)
 #endif
 
+#ifdef OPENCV
+#include "opencv2/videoio/videoio_c.h"
+#endif // OPENCV
+
 #define SECRET_NUM -1234
 #define TWO_PI 6.2831853071795864769252866
 
