@@ -5,8 +5,7 @@
 #include "stddef.h"
 #include "tree.h"
 
-struct network;
-typedef struct network network;
+struct network_state;
 
 struct layer;
 typedef struct layer layer;
@@ -39,18 +38,18 @@ typedef enum {
 } LAYER_TYPE;
 
 typedef enum{
-    SSE, MASKED, L1, SMOOTH
+    SSE, MASKED, SMOOTH
 } COST_TYPE;
 
 struct layer{
     LAYER_TYPE type;
     ACTIVATION activation;
     COST_TYPE cost_type;
-    void (*forward)   (struct layer, struct network);
-    void (*backward)  (struct layer, struct network);
+    void (*forward)   (struct layer, struct network_state);
+    void (*backward)  (struct layer, struct network_state);
     void (*update)    (struct layer, int, float, float, float);
-    void (*forward_gpu)   (struct layer, struct network);
-    void (*backward_gpu)  (struct layer, struct network);
+    void (*forward_gpu)   (struct layer, struct network_state);
+    void (*backward_gpu)  (struct layer, struct network_state);
     void (*update_gpu)    (struct layer, int, float, float, float);
     int batch_normalize;
     int shortcut;
@@ -59,9 +58,6 @@ struct layer{
     int flipped;
     int inputs;
     int outputs;
-    int nweights;
-    int nbiases;
-    int extra;
     int truths;
     int h,w,c;
     int out_h, out_w, out_c;
@@ -72,7 +68,6 @@ struct layer{
     int side;
     int stride;
     int reverse;
-    int flatten;
     int pad;
     int sqrt;
     int flip;
@@ -81,8 +76,6 @@ struct layer{
     int xnor;
     int steps;
     int hidden;
-    int truth;
-    float smooth;
     float dot;
     float angle;
     float jitter;
@@ -90,7 +83,6 @@ struct layer{
     float exposure;
     float shift;
     float ratio;
-    float learning_rate_scale;
     int softmax;
     int classes;
     int coords;
@@ -107,7 +99,14 @@ struct layer{
     float B1;
     float B2;
     float eps;
+    float *m_gpu;
+    float *v_gpu;
     int t;
+    float *m;
+    float *v;
+
+    tree *softmax_tree;
+    int  *map;
 
     float alpha;
     float beta;
@@ -123,8 +122,6 @@ struct layer{
     int classfix;
     int absolute;
 
-    int onlyforward;
-    int stopbackward;
     int dontload;
     int dontloadscales;
 
@@ -132,33 +129,33 @@ struct layer{
     float probability;
     float scale;
 
-    char  * cweights;
-    int   * indexes;
+    int *indexes;
+    float *rand;
+    float *cost;
+    char  *cweights;
+    float *state;
+    float *prev_state;
+    float *forgot_state;
+    float *forgot_delta;
+    float *state_delta;
+
+    float *concat;
+    float *concat_delta;
+
+    float *binary_weights;
+
+    float *biases;
+    float *bias_updates;
+
+    float *scales;
+    float *scale_updates;
+
+    float *weights;
+    float *weight_updates;
+
+    float *col_image;
     int   * input_layers;
     int   * input_sizes;
-    int   * map;
-    float * rand;
-    float * cost;
-    float * state;
-    float * prev_state;
-    float * forgot_state;
-    float * forgot_delta;
-    float * state_delta;
-
-    float * concat;
-    float * concat_delta;
-
-    float * binary_weights;
-
-    float * biases;
-    float * bias_updates;
-
-    float * scales;
-    float * scale_updates;
-
-    float * weights;
-    float * weight_updates;
-
     float * delta;
     float * output;
     float * squared;
@@ -176,20 +173,6 @@ struct layer{
 
     float * x;
     float * x_norm;
-
-    float * m;
-    float * v;
-    
-    float * bias_m;
-    float * bias_v;
-    float * scale_m;
-    float * scale_v;
-
-    float * z_cpu;
-    float * r_cpu;
-    float * h_cpu;
-
-    float * binary_input;
 
     struct layer *input_layer;
     struct layer *self_layer;
@@ -211,24 +194,20 @@ struct layer{
     struct layer *input_h_layer;
     struct layer *state_h_layer;
 
-    tree *softmax_tree;
+    float *z_cpu;
+    float *r_cpu;
+    float *h_cpu;
+
+    float *binary_input;
 
     size_t workspace_size;
 
     #ifdef GPU
-    int *indexes_gpu;
-
     float *z_gpu;
     float *r_gpu;
     float *h_gpu;
 
-    float *m_gpu;
-    float *v_gpu;
-    float *bias_m_gpu;
-    float *scale_m_gpu;
-    float *bias_v_gpu;
-    float *scale_v_gpu;
-
+    int *indexes_gpu;
     float * prev_state_gpu;
     float * forgot_state_gpu;
     float * forgot_delta_gpu;
@@ -253,6 +232,8 @@ struct layer{
     float * variance_delta_gpu;
     float * mean_delta_gpu;
 
+    float * col_image_gpu;
+
     float * x_gpu;
     float * x_norm_gpu;
     float * weights_gpu;
@@ -272,7 +253,6 @@ struct layer{
     #ifdef CUDNN
     cudnnTensorDescriptor_t srcTensorDesc, dstTensorDesc;
     cudnnTensorDescriptor_t dsrcTensorDesc, ddstTensorDesc;
-    cudnnTensorDescriptor_t normTensorDesc;
     cudnnFilterDescriptor_t weightDesc;
     cudnnFilterDescriptor_t dweightDesc;
     cudnnConvolutionDescriptor_t convDesc;

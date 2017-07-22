@@ -57,10 +57,9 @@ local_layer make_local_layer(int batch, int h, int w, int c, int n, int size, in
     float scale = sqrt(2./(size*size*c));
     for(i = 0; i < c*n*size*size; ++i) l.weights[i] = scale*rand_uniform(-1,1);
 
+    l.col_image = calloc(out_h*out_w*size*size*c, sizeof(float));
     l.output = calloc(l.batch*out_h * out_w * n, sizeof(float));
     l.delta  = calloc(l.batch*out_h * out_w * n, sizeof(float));
-
-    l.workspace_size = out_h*out_w*size*size*c;
     
     l.forward = forward_local_layer;
     l.backward = backward_local_layer;
@@ -77,6 +76,7 @@ local_layer make_local_layer(int batch, int h, int w, int c, int n, int size, in
     l.biases_gpu = cuda_make_array(l.biases, l.outputs);
     l.bias_updates_gpu = cuda_make_array(l.bias_updates, l.outputs);
 
+    l.col_image_gpu = cuda_make_array(l.col_image, out_h*out_w*size*size*c);
     l.delta_gpu = cuda_make_array(l.delta, l.batch*out_h*out_w*n);
     l.output_gpu = cuda_make_array(l.output, l.batch*out_h*out_w*n);
 
@@ -88,7 +88,7 @@ local_layer make_local_layer(int batch, int h, int w, int c, int n, int size, in
     return l;
 }
 
-void forward_local_layer(const local_layer l, network net)
+void forward_local_layer(const local_layer l, network_state state)
 {
     int out_h = local_out_height(l);
     int out_w = local_out_width(l);
@@ -100,13 +100,13 @@ void forward_local_layer(const local_layer l, network net)
     }
 
     for(i = 0; i < l.batch; ++i){
-        float *input = net.input + i*l.w*l.h*l.c;
+        float *input = state.input + i*l.w*l.h*l.c;
         im2col_cpu(input, l.c, l.h, l.w, 
-                l.size, l.stride, l.pad, net.workspace);
+                l.size, l.stride, l.pad, l.col_image);
         float *output = l.output + i*l.outputs;
         for(j = 0; j < locations; ++j){
             float *a = l.weights + j*l.size*l.size*l.c*l.n;
-            float *b = net.workspace + j;
+            float *b = l.col_image + j;
             float *c = output + j;
 
             int m = l.n;
@@ -119,7 +119,7 @@ void forward_local_layer(const local_layer l, network net)
     activate_array(l.output, l.outputs*l.batch, l.activation);
 }
 
-void backward_local_layer(local_layer l, network net)
+void backward_local_layer(local_layer l, network_state state)
 {
     int i, j;
     int locations = l.out_w*l.out_h;
@@ -131,13 +131,13 @@ void backward_local_layer(local_layer l, network net)
     }
 
     for(i = 0; i < l.batch; ++i){
-        float *input = net.input + i*l.w*l.h*l.c;
+        float *input = state.input + i*l.w*l.h*l.c;
         im2col_cpu(input, l.c, l.h, l.w, 
-                l.size, l.stride, l.pad, net.workspace);
+                l.size, l.stride, l.pad, l.col_image);
 
         for(j = 0; j < locations; ++j){ 
             float *a = l.delta + i*l.outputs + j;
-            float *b = net.workspace + j;
+            float *b = l.col_image + j;
             float *c = l.weight_updates + j*l.size*l.size*l.c*l.n;
             int m = l.n;
             int n = l.size*l.size*l.c;
@@ -146,11 +146,11 @@ void backward_local_layer(local_layer l, network net)
             gemm(0,1,m,n,k,1,a,locations,b,locations,1,c,n);
         }
 
-        if(net.delta){
+        if(state.delta){
             for(j = 0; j < locations; ++j){ 
                 float *a = l.weights + j*l.size*l.size*l.c*l.n;
                 float *b = l.delta + i*l.outputs + j;
-                float *c = net.workspace + j;
+                float *c = l.col_image + j;
 
                 int m = l.size*l.size*l.c;
                 int n = 1;
@@ -159,7 +159,7 @@ void backward_local_layer(local_layer l, network net)
                 gemm(1,0,m,n,k,1,a,m,b,locations,0,c,locations);
             }
 
-            col2im_cpu(net.workspace, l.c,  l.h,  l.w,  l.size,  l.stride, l.pad, net.delta+i*l.c*l.h*l.w);
+            col2im_cpu(l.col_image, l.c,  l.h,  l.w,  l.size,  l.stride, l.pad, state.delta+i*l.c*l.h*l.w);
         }
     }
 }
@@ -178,7 +178,7 @@ void update_local_layer(local_layer l, int batch, float learning_rate, float mom
 
 #ifdef GPU
 
-void forward_local_layer_gpu(const local_layer l, network net)
+void forward_local_layer_gpu(const local_layer l, network_state state)
 {
     int out_h = local_out_height(l);
     int out_w = local_out_width(l);
@@ -190,13 +190,13 @@ void forward_local_layer_gpu(const local_layer l, network net)
     }
 
     for(i = 0; i < l.batch; ++i){
-        float *input = net.input_gpu + i*l.w*l.h*l.c;
+        float *input = state.input + i*l.w*l.h*l.c;
         im2col_ongpu(input, l.c, l.h, l.w, 
-                l.size, l.stride, l.pad, net.workspace);
+                l.size, l.stride, l.pad, l.col_image_gpu);
         float *output = l.output_gpu + i*l.outputs;
         for(j = 0; j < locations; ++j){
             float *a = l.weights_gpu + j*l.size*l.size*l.c*l.n;
-            float *b = net.workspace + j;
+            float *b = l.col_image_gpu + j;
             float *c = output + j;
 
             int m = l.n;
@@ -209,7 +209,7 @@ void forward_local_layer_gpu(const local_layer l, network net)
     activate_array_ongpu(l.output_gpu, l.outputs*l.batch, l.activation);
 }
 
-void backward_local_layer_gpu(local_layer l, network net)
+void backward_local_layer_gpu(local_layer l, network_state state)
 {
     int i, j;
     int locations = l.out_w*l.out_h;
@@ -220,13 +220,13 @@ void backward_local_layer_gpu(local_layer l, network net)
     }
 
     for(i = 0; i < l.batch; ++i){
-        float *input = net.input_gpu + i*l.w*l.h*l.c;
+        float *input = state.input + i*l.w*l.h*l.c;
         im2col_ongpu(input, l.c, l.h, l.w, 
-                l.size, l.stride, l.pad, net.workspace);
+                l.size, l.stride, l.pad, l.col_image_gpu);
 
         for(j = 0; j < locations; ++j){ 
             float *a = l.delta_gpu + i*l.outputs + j;
-            float *b = net.workspace + j;
+            float *b = l.col_image_gpu + j;
             float *c = l.weight_updates_gpu + j*l.size*l.size*l.c*l.n;
             int m = l.n;
             int n = l.size*l.size*l.c;
@@ -235,11 +235,11 @@ void backward_local_layer_gpu(local_layer l, network net)
             gemm_ongpu(0,1,m,n,k,1,a,locations,b,locations,1,c,n);
         }
 
-        if(net.delta_gpu){
+        if(state.delta){
             for(j = 0; j < locations; ++j){ 
                 float *a = l.weights_gpu + j*l.size*l.size*l.c*l.n;
                 float *b = l.delta_gpu + i*l.outputs + j;
-                float *c = net.workspace + j;
+                float *c = l.col_image_gpu + j;
 
                 int m = l.size*l.size*l.c;
                 int n = 1;
@@ -248,7 +248,7 @@ void backward_local_layer_gpu(local_layer l, network net)
                 gemm_ongpu(1,0,m,n,k,1,a,m,b,locations,0,c,locations);
             }
 
-            col2im_ongpu(net.workspace, l.c,  l.h,  l.w,  l.size,  l.stride, l.pad, net.delta_gpu+i*l.c*l.h*l.w);
+            col2im_ongpu(l.col_image_gpu, l.c,  l.h,  l.w,  l.size,  l.stride, l.pad, state.delta+i*l.c*l.h*l.w);
         }
     }
 }

@@ -1,6 +1,10 @@
 #ifndef CUDA_H
 #define CUDA_H
 
+#if defined(_MSC_VER) && _MSC_VER < 1900
+	#define inline __inline
+#endif
+
 extern int gpu_index;
 
 #ifdef GPU
@@ -26,7 +30,6 @@ void cuda_free(float *x_gpu);
 void cuda_random(float *x_gpu, size_t n);
 float cuda_compare(float *x_gpu, float *x, size_t n, char *s);
 dim3 cuda_gridsize(size_t n);
-float cuda_mag_array(float *x_gpu, size_t n);
 
 #ifdef CUDNN
 cudnnHandle_t cudnn_handle();

@@ -10,6 +10,12 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
+#ifdef OPENCV
+#include "opencv2/highgui/highgui_c.h"
+#include "opencv2/imgproc/imgproc_c.h"
+#endif
+
+
 int windows = 0;
 
 float colors[6][3] = { {1,0,1}, {0,0,1},{0,1,1},{0,1,0},{1,1,0},{1,0,0} };
@@ -187,7 +193,6 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
                 alphabet = 0;
             }
 
-            //printf("%d %s: %.0f%%\n", i, names[class], prob*100);
             printf("%s: %.0f%%\n", names[class], prob*100);
             int offset = class*123457 % classes;
             float red = get_color(2,offset,classes);
@@ -220,6 +225,78 @@ void draw_detections(image im, int num, float thresh, box *boxes, float **probs,
         }
     }
 }
+
+#ifdef OPENCV
+void draw_detections_cv(IplImage* show_img, int num, float thresh, box *boxes, float **probs, char **names, image **alphabet, int classes)
+{
+	int i;
+
+	for (i = 0; i < num; ++i) {
+		int class = max_index(probs[i], classes);
+		float prob = probs[i][class];
+		if (prob > thresh) {
+
+			int width = show_img->height * .012;
+
+			if (0) {
+				width = pow(prob, 1. / 2.) * 10 + 1;
+				alphabet = 0;
+			}
+
+			printf("%s: %.0f%%\n", names[class], prob * 100);
+			int offset = class * 123457 % classes;
+			float red = get_color(2, offset, classes);
+			float green = get_color(1, offset, classes);
+			float blue = get_color(0, offset, classes);
+			float rgb[3];
+
+			//width = prob*20+2;
+
+			rgb[0] = red;
+			rgb[1] = green;
+			rgb[2] = blue;
+			box b = boxes[i];
+
+			int left = (b.x - b.w / 2.)*show_img->width;
+			int right = (b.x + b.w / 2.)*show_img->width;
+			int top = (b.y - b.h / 2.)*show_img->height;
+			int bot = (b.y + b.h / 2.)*show_img->height;
+
+			if (left < 0) left = 0;
+			if (right > show_img->width - 1) right = show_img->width - 1;
+			if (top < 0) top = 0;
+			if (bot > show_img->height - 1) bot = show_img->height - 1;
+
+			float const font_size = show_img->height / 1000.F;
+			CvPoint pt1, pt2, pt_text, pt_text_bg1, pt_text_bg2;
+			pt1.x = left;
+			pt1.y = top;
+			pt2.x = right;
+			pt2.y = bot;
+			pt_text.x = left;
+			pt_text.y = top - 12;
+			pt_text_bg1.x = left;
+			pt_text_bg1.y = top - (10+25*font_size);
+			pt_text_bg2.x = right;
+			pt_text_bg2.y = top;
+			CvScalar color;
+			color.val[0] = red * 256;
+			color.val[1] = green * 256;
+			color.val[2] = blue * 256;
+
+			cvRectangle(show_img, pt1, pt2, color, width, 8, 0);
+
+			cvRectangle(show_img, pt_text_bg1, pt_text_bg2, color, width, 8, 0);
+			cvRectangle(show_img, pt_text_bg1, pt_text_bg2, color, CV_FILLED, 8, 0);	// filled
+			CvScalar black_color;
+			black_color.val[0] = 0;
+			CvFont font;
+			cvInitFont(&font, CV_FONT_HERSHEY_COMPLEX, font_size, font_size, 0, font_size*3, 8);
+			cvPutText(show_img, names[class], pt_text, &font, black_color);
+		}
+	}
+}
+#endif
 
 void transpose_image(image im)
 {
@@ -287,25 +364,6 @@ image image_distance(image a, image b)
         dist.data[j] = sqrt(dist.data[j]);
     }
     return dist;
-}
-
-void ghost_image(image source, image dest, int dx, int dy)
-{
-    int x,y,k;
-    float max_dist = sqrt((-source.w/2. + .5)*(-source.w/2. + .5));
-    for(k = 0; k < source.c; ++k){
-        for(y = 0; y < source.h; ++y){
-            for(x = 0; x < source.w; ++x){
-                float dist = sqrt((x - source.w/2. + .5)*(x - source.w/2. + .5) + (y - source.h/2. + .5)*(y - source.h/2. + .5));
-                float alpha = (1 - dist/max_dist);
-                if(alpha < 0) alpha = 0;
-                float v1 = get_pixel(source, x,y,k);
-                float v2 = get_pixel(dest, dx+x,dy+y,k);
-                float val = alpha*v1 + (1-alpha)*v2;
-                set_pixel(dest, dx+x, dy+y, k, val);
-            }
-        }
-    }
 }
 
 void embed_image(image source, image dest, int dx, int dy)
@@ -451,7 +509,45 @@ void show_image_cv(image p, const char *name)
         cvReleaseImage(&buffer);
     }
     cvShowImage(buff, disp);
+
     cvReleaseImage(&disp);
+}
+
+
+void show_image_cv_ipl(IplImage *disp, const char *name)
+{
+	if (disp == NULL) return;
+	char buff[256];
+	//sprintf(buff, "%s (%d)", name, windows);
+	sprintf(buff, "%s", name);
+	cvNamedWindow(buff, CV_WINDOW_NORMAL);
+	//cvMoveWindow(buff, 100*(windows%10) + 200*(windows/10), 100*(windows%10));
+	++windows;
+	cvShowImage(buff, disp);
+
+
+	{
+		CvSize size;
+		{
+			size.width = disp->width, size.height = disp->height;
+		}
+		
+		static CvVideoWriter* output_video = NULL;    // cv::VideoWriter output_video;
+		if (output_video == NULL)
+		{
+			//printf("\n SRC output_video = %p \n", output_video);
+			const char* output_name = "test_dnn_out.avi";
+			//output_video = cvCreateVideoWriter(output_name, CV_FOURCC('H', '2', '6', '4'), 25, size, 1);
+			output_video = cvCreateVideoWriter(output_name, CV_FOURCC('D', 'I', 'V', 'X'), 25, size, 1);
+			//output_video = cvCreateVideoWriter(output_name, CV_FOURCC('M', 'J', 'P', 'G'), 25, size, 1);
+			//printf("\n cvCreateVideoWriter, DST output_video = %p  \n", output_video);
+		}
+
+		//cvWriteFrame(output_video, disp);	// comment this line to improve FPS !!!
+		printf("\n cvWriteFrame \n");
+	}
+
+	cvReleaseImage(&disp);
 }
 #endif
 
@@ -520,6 +616,20 @@ image get_image_from_stream(CvCapture *cap)
     image im = ipl_to_image(src);
     rgbgr_image(im);
     return im;
+}
+
+image get_image_from_stream_resize(CvCapture *cap, int w, int h, IplImage** in_img)
+{
+	IplImage* src = cvQueryFrame(cap);
+	if (!src) return make_empty_image(0, 0, 0);
+	IplImage* new_img = cvCreateImage(cvSize(w, h), IPL_DEPTH_8U, 3);
+	*in_img = cvCreateImage(cvSize(src->width, src->height), IPL_DEPTH_8U, 3);
+	cvResize(src, *in_img, CV_INTER_LINEAR);
+	cvResize(src, new_img, CV_INTER_LINEAR);
+	image im = ipl_to_image(new_img);
+	cvReleaseImage(&new_img);
+	rgbgr_image(im);
+	return im;
 }
 
 void save_image_jpg(image p, const char *name)
@@ -627,29 +737,6 @@ image float_to_image(int w, int h, int c, float *data)
     return out;
 }
 
-void place_image(image im, int w, int h, int dx, int dy, image canvas)
-{
-    int x, y, c;
-    for(c = 0; c < im.c; ++c){
-        for(y = 0; y < h; ++y){
-            for(x = 0; x < w; ++x){
-                int rx = ((float)x / w) * im.w;
-                int ry = ((float)y / h) * im.h;
-                float val = bilinear_interpolate(im, rx, ry, c);
-                set_pixel(canvas, x + dx, y + dy, c, val);
-            }
-        }
-    }
-}
-
-image center_crop_image(image im, int w, int h)
-{
-    int m = (im.w < im.h) ? im.w : im.h;   
-    image c = crop_image(im, (im.w - m) / 2, (im.h - m)/2, m, m);
-    image r = resize_image(c, w, h);
-    free_image(c);
-    return r;
-}
 
 image rotate_crop_image(image im, float rad, float s, int w, int h, float dx, float dy, float aspect)
 {
@@ -687,12 +774,6 @@ image rotate_image(image im, float rad)
         }
     }
     return rot;
-}
-
-void fill_image(image m, float s)
-{
-    int i;
-    for(i = 0; i < m.h*m.w*m.c; ++i) m.data[i] = s;
 }
 
 void translate_image(image m, float s)
@@ -796,27 +877,6 @@ void composite_3d(char *f1, char *f2, char *out, int delta)
 #endif
 }
 
-image letterbox_image(image im, int w, int h)
-{
-    int new_w = im.w;
-    int new_h = im.h;
-    if (((float)w/im.w) < ((float)h/im.h)) {
-        new_w = w;
-        new_h = (im.h * w)/im.w;
-    } else {
-        new_h = h;
-        new_w = (im.w * h)/im.h;
-    }
-    image resized = resize_image(im, new_w, new_h);
-    image boxed = make_image(w, h, im.c);
-    fill_image(boxed, .5);
-    //int i;
-    //for(i = 0; i < boxed.w*boxed.h*boxed.c; ++i) boxed.data[i] = 0;
-    embed_image(resized, boxed, (w-new_w)/2, (h-new_h)/2); 
-    free_image(resized);
-    return boxed;
-}
-
 image resize_max(image im, int max)
 {
     int w = im.w;
@@ -886,52 +946,6 @@ float three_way_max(float a, float b, float c)
 float three_way_min(float a, float b, float c)
 {
     return (a < b) ? ( (a < c) ? a : c) : ( (b < c) ? b : c) ;
-}
-
-void yuv_to_rgb(image im)
-{
-    assert(im.c == 3);
-    int i, j;
-    float r, g, b;
-    float y, u, v;
-    for(j = 0; j < im.h; ++j){
-        for(i = 0; i < im.w; ++i){
-            y = get_pixel(im, i , j, 0);
-            u = get_pixel(im, i , j, 1);
-            v = get_pixel(im, i , j, 2);
-            
-            r = y + 1.13983*v;
-            g = y + -.39465*u + -.58060*v;
-            b = y + 2.03211*u;
-
-            set_pixel(im, i, j, 0, r);
-            set_pixel(im, i, j, 1, g);
-            set_pixel(im, i, j, 2, b);
-        }
-    }
-}
-
-void rgb_to_yuv(image im)
-{
-    assert(im.c == 3);
-    int i, j;
-    float r, g, b;
-    float y, u, v;
-    for(j = 0; j < im.h; ++j){
-        for(i = 0; i < im.w; ++i){
-            r = get_pixel(im, i , j, 0);
-            g = get_pixel(im, i , j, 1);
-            b = get_pixel(im, i , j, 2);
-            
-            y = .299*r + .587*g + .114*b;
-            u = -.14713*r + -.28886*g + .436*b;
-            v = .615*r + -.51499*g + -.10001*b;
-
-            set_pixel(im, i, j, 0, y);
-            set_pixel(im, i, j, 1, u);
-            set_pixel(im, i, j, 2, v);
-        }
-    }
 }
 
 // http://www.cs.rit.edu/~ncs/color/t_convert.html
@@ -1013,30 +1027,12 @@ void hsv_to_rgb(image im)
     }
 }
 
-void grayscale_image_3c(image im)
-{
-    assert(im.c == 3);
-    int i, j, k;
-    float scale[] = {0.299, 0.587, 0.114};
-    for(j = 0; j < im.h; ++j){
-        for(i = 0; i < im.w; ++i){
-            float val = 0;
-            for(k = 0; k < 3; ++k){
-                val += scale[k]*get_pixel(im, i, j, k);
-            }
-            im.data[0*im.h*im.w + im.w*j + i] = val;
-            im.data[1*im.h*im.w + im.w*j + i] = val;
-            im.data[2*im.h*im.w + im.w*j + i] = val;
-        }
-    }
-}
-
 image grayscale_image(image im)
 {
     assert(im.c == 3);
     int i, j, k;
     image gray = make_image(im.w, im.h, 1);
-    float scale[] = {0.299, 0.587, 0.114};
+    float scale[] = {0.587, 0.299, 0.114};
     for(k = 0; k < im.c; ++k){
         for(j = 0; j < im.h; ++j){
             for(i = 0; i < im.w; ++i){
